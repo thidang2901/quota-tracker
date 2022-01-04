@@ -1,8 +1,8 @@
 import logging
 from time import time, localtime
-from utils import read_json, write_to_json
 
-from options import QuotaOptions
+from quota_tracker.options import QuotaOptions
+from quota_tracker.utils import read_json, write_to_json
 
 
 class QuotaTracker(object):
@@ -28,54 +28,47 @@ class QuotaTracker(object):
             write_to_json(
                 _dir=self.dir_path,
                 filename=self.filename,
-                data={"timestamp": int(time()), "count": 0},
+                data={"timestamp": int(time()), "count": self.options.start_quota},
                 mode='w'
             )
 
         self._refresh_quota()
-        self.count = self._load_count()
         self.max_quota = max_quota
-        self.exceed_quota = False
+        self.current_quota = self._load_current_quota()
 
-    def is_exceeded_quota(self):
-        current_quota = self._load_count()
-        if current_quota >= self.max_quota:
-            return True
-        return False
-
-    def _load_count(self):
+    def _load_current_quota(self):
         log = read_json(f"{self.dir_path}/{self.filename}")
-        return log["count"]
+        return log.get("count")
 
     def _save_count(self):
-        log = {"timestamp": int(time()), "count": self.count}
+        log = {"timestamp": int(time()), "count": self.current_quota}
         write_to_json(self.dir_path, self.filename, log)
 
-    def get_count(self):
-        return self.count
+    def get_current_quota(self):
+        return self.current_quota
 
     def count_request(self, num=1):
-        self.count += num
+        self.current_quota += num
         self._save_count()
+
+    def show_status(self):
+        self.logger.info(f'CurrentQuota: {self.get_current_quota()}/{self.max_quota}')
 
     def _refresh_quota(self):
         log = read_json(f"{self.dir_path}/{self.filename}")
-        log_time = localtime(log["timestamp"])
+        log_time = localtime(log.get("timestamp"))
         now_time = localtime(time())
         if self.options.refresh_by == "month" and (now_time.tm_mon > log_time.tm_mon) or \
                 self.options.refresh_by == "day" and (now_time.tm_mday > log_time.tm_mday):
-            self.count = 0
+            self.current_quota = 0
             self._save_count()
 
-    def validate_quota(self):
-        if self.get_count() < self.options.warning_rate * float(self.max_quota):
+    def is_exceeded_quota(self):
+        if self.current_quota < self.options.warning_rate * float(self.max_quota):
             self.logger.info("QuotaStatus: OK")
-        elif self.get_count() <= self.max_quota:
+        elif self.current_quota < self.max_quota:
             self.logger.info(f"QuotaStatus: WARNING - Exceeded {self.options.warning_rate * 100}% of quota requests")
         else:
             self.logger.info(f"QuotaStatus: STOPPING - Exceeded 100% of quota requests")
-            self.exceed_quota = True
-        return self.exceed_quota
-
-    def show_quota(self):
-        self.logger.info(f'CurrentQuota: {self.get_count()}/{self.max_quota}')
+            return True
+        return False
